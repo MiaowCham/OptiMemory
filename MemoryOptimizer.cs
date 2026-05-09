@@ -47,6 +47,7 @@ public static class MemoryOptimizer
 
     private static void ExecuteMemoryListOperation(int infoValue)
     {
+        Program.Dbg($"执行内存列表操作: infoValue={infoValue}");
         var handle = GCHandle.Alloc(infoValue, GCHandleType.Pinned);
         try
         {
@@ -63,6 +64,7 @@ public static class MemoryOptimizer
 
     private static void ExecuteStructureOperation<T>(T structure, NativeInterop.SystemInformationClass infoClass) where T : struct
     {
+        Program.Dbg($"执行结构操作: infoClass={infoClass}, struct={typeof(T).Name}");
         var handle = GCHandle.Alloc(structure, GCHandleType.Pinned);
         try
         {
@@ -80,19 +82,23 @@ public static class MemoryOptimizer
     private static void AcquirePrivileges()
     {
         if (_privilegesAcquired) return;
+        Program.Dbg("尝试获取系统内存优化权限");
         NativeInterop.SetPrivilege(NativeInterop.SePrivilege.SeProfileSingleProcessPrivilege, true);
         NativeInterop.SetPrivilege(NativeInterop.SePrivilege.SeIncreaseQuotaPrivilege, true);
         _privilegesAcquired = true;
+        Program.Dbg("系统权限获取完成");
     }
 
     public static OptimizeResult Optimize(MemoryScope scope = MemoryScope.All)
     {
         var (total, before) = NativeInterop.GetPhysicalMemoryBytes();
+        Program.Dbg($"Optimize 开始: scope={scope}, isAdmin={IsAdmin}, beforeAvail={OptimizeResult.FormatBytes(before)}, total={OptimizeResult.FormatBytes(total)}");
 
         // Always perform managed GC cleanup
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
         GC.WaitForPendingFinalizers();
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+        Program.Dbg("托管 GC 清理阶段完成");
 
         var errors = new List<string>();
 
@@ -122,6 +128,7 @@ public static class MemoryOptimizer
         }
 
         var (_, after) = NativeInterop.GetPhysicalMemoryBytes();
+        Program.Dbg($"Optimize 结束: afterAvail={OptimizeResult.FormatBytes(after)}, freed={OptimizeResult.FormatBytes(after > before ? after - before : 0)}, errors={errors.Count}");
         return new OptimizeResult(total, before, after, errors);
     }
 
@@ -130,8 +137,17 @@ public static class MemoryOptimizer
 
     private static void TryRun(Action action, string name, List<string> errors)
     {
-        try { action(); }
-        catch (Exception ex) { errors.Add($"{name}: {ex.Message}"); }
+        try
+        {
+            Program.Dbg($"开始操作: {name}");
+            action();
+            Program.Dbg($"操作成功: {name}");
+        }
+        catch (Exception ex)
+        {
+            Program.Dbg($"操作失败: {name}, error={ex.Message}");
+            errors.Add($"{name}: {ex.Message}");
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]

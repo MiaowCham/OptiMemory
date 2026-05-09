@@ -5,6 +5,14 @@ namespace OptiMemory;
 
 public sealed class MainForm : Form
 {
+    private enum OptimizeTrigger
+    {
+        ManualButton,
+        TrayMenu,
+        Startup,
+        AutoTimer
+    }
+
     // Theme colors
     private static readonly Color DarkBg = Color.FromArgb(28, 28, 28);
     private static readonly Color DarkSurface = Color.FromArgb(42, 42, 42);
@@ -51,7 +59,12 @@ public sealed class MainForm : Form
     private System.Windows.Forms.Timer _autoCleanTimer = null!;
 
     private bool _isOptimizing;
+    private bool _syncingAutoCleanState;
+    private bool _autoCleanDeferredWhileBusy;
+    private OptimizeTrigger _activeTrigger = OptimizeTrigger.ManualButton;
+    private DateTime _optimizeStartedAt;
     private bool _closing;
+    private Icon? _autoCleanTrayIcon;
 
     public MainForm(AppSettings settings)
     {
@@ -300,7 +313,7 @@ public sealed class MainForm : Form
         {
             RefreshMemoryDisplay();
             // Run one optimization immediately on startup
-            BeginInvoke(() => OnOptimizeClick(null, EventArgs.Empty));
+            BeginInvoke(() => BeginOptimize(OptimizeTrigger.Startup));
         };
 
         // Listen for system theme changes
@@ -311,11 +324,15 @@ public sealed class MainForm : Form
 
     private void SetupTray()
     {
-        _trayShowItem = new ToolStripMenuItem("显示窗口");
-        _trayShowItem.Click += (_, _) => ShowWindow();
+        _trayShowItem = new ToolStripMenuItem("显示主界面");
+        _trayShowItem.Click += (_, _) =>
+        {
+            if (Visible) Hide();
+            else ShowWindow();
+        };
 
         _trayOptimizeItem = new ToolStripMenuItem("立即优化");
-        _trayOptimizeItem.Click += (_, _) => { ShowWindow(); OnOptimizeClick(null, EventArgs.Empty); };
+        _trayOptimizeItem.Click += (_, _) => BeginOptimize(OptimizeTrigger.TrayMenu);
 
         _trayAutoCleanItem = new ToolStripMenuItem("自动清理")
         {
@@ -324,16 +341,15 @@ public sealed class MainForm : Form
         };
         _trayAutoCleanItem.Click += (_, _) =>
         {
-            _settings.AutoClean = _trayAutoCleanItem.Checked;
-            _chkAutoClean.Checked = _trayAutoCleanItem.Checked;
-            _settings.Save();
-            SetupAutoClean();
+            SetAutoCleanEnabled(_trayAutoCleanItem.Checked, "托盘菜单");
         };
 
         _trayExitItem = new ToolStripMenuItem("退出");
         _trayExitItem.Click += (_, _) => ExitApp();
 
         var menu = new ContextMenuStrip();
+        menu.Opening += (_, _) =>
+            _trayShowItem.Text = Visible ? "隐藏主界面" : "显示主界面";
         menu.Items.Add(_trayShowItem);
         menu.Items.Add(_trayOptimizeItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -349,6 +365,11 @@ public sealed class MainForm : Form
             Visible = true
         };
         _tray.DoubleClick += (_, _) => ShowWindow();
+
+        // 预加载自动清理托盘图标
+        _autoCleanTrayIcon = LoadAutoCleanIcon();
+        if (_settings.AutoClean && _autoCleanTrayIcon is not null)
+            _tray.Icon = _autoCleanTrayIcon;
     }
 
     private static Icon LoadIcon()
@@ -358,10 +379,21 @@ public sealed class MainForm : Form
         catch { return SystemIcons.Application; }
     }
 
+    private static Icon? LoadAutoCleanIcon()
+    {
+        try
+        {
+            var stream = typeof(MainForm).Assembly.GetManifestResourceStream("OptiMemory.Auto.ico");
+            return stream is null ? null : new Icon(stream);
+        }
+        catch { return null; }
+    }
+
     private void ShowWindow()
     {
         Show();
         WindowState = FormWindowState.Normal;
+        ApplyOptimizeUiState();
         Activate();
     }
 
@@ -470,69 +502,23 @@ public sealed class MainForm : Form
         catch { /* ignore */ }
     }
 
-    private async void OnOptimizeClick(object? sender, EventArgs e)
+    private void OnOptimizeClick(object? sender, EventArgs e)
     {
-        if (_isOptimizing) return;
-        _isOptimizing = true;
-        _btnOptimize.Enabled = false;
-        _btnOptimize.Text = "优化中…";
-
-        try
-        {
-            if (MemoryOptimizer.IsAdmin)
-            {
-                _lblStatus.Text = "正在优化内存…";
-                var result = await Task.Run(() => MemoryOptimizer.Optimize());
-                _lblStatus.Text = result.Errors.Count == 0
-                    ? $"完成：释放 {result.FreedText}，可用 {result.AfterText}"
-                    : $"完成（部分操作失败）：可用 {result.AfterText}";
-                RefreshMemoryDisplay();
-            }
-            else
-            {
-                _lblStatus.Text = "正在请求管理员权限…";
-                var result = await ElevationService.RequestOptimizeAsync();
-                if (result == null)
-                {
-                    _lblStatus.Text = "已取消";
-                }
-                else if (!result.Success)
-                {
-                    _lblStatus.Text = $"失败：{result.ErrorMessage}";
-                }
-                else
-                {
-                    _lblStatus.Text = result.Errors.Count == 0
-                        ? $"完成：释放 {result.FreedText}，可用 {result.AfterText}"
-                        : $"完成（部分操作失败）：可用 {result.AfterText}";
-                    RefreshMemoryDisplay();
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _lblStatus.Text = $"失败：{ex.Message}";
-        }
-        finally
-        {
-            _isOptimizing = false;
-            _btnOptimize.Enabled = true;
-            _btnOptimize.Text = "立即优化";
-        }
+        BeginOptimize(OptimizeTrigger.ManualButton);
     }
 
     private void OnAutoCleanChanged(object? sender, EventArgs e)
     {
-        _settings.AutoClean = _chkAutoClean.Checked;
-        _trayAutoCleanItem.Checked = _chkAutoClean.Checked;
-        _settings.Save();
-        SetupAutoClean();
+        if (_syncingAutoCleanState) return;
+        SetAutoCleanEnabled(_chkAutoClean.Checked, "主界面开关");
     }
 
     private void OnIntervalChanged(object? sender, EventArgs e)
     {
         _settings.AutoCleanIntervalMinutes = (int)_nudInterval.Value;
         _settings.Save();
+        SetStatus($"自动清理间隔已更新为 {_settings.AutoCleanIntervalMinutes} 分钟");
+        Program.Dbg($"自动清理间隔更新: {_settings.AutoCleanIntervalMinutes} 分钟");
         SetupAutoClean();
     }
 
@@ -540,6 +526,8 @@ public sealed class MainForm : Form
     {
         _settings.AutoCleanThresholdPercent = (int)_nudThreshold.Value;
         _settings.Save();
+        SetStatus($"自动清理阈值已更新为 {_settings.AutoCleanThresholdPercent}%");
+        Program.Dbg($"自动清理阈值更新: {_settings.AutoCleanThresholdPercent}%");
     }
 
     private void SetupAutoClean()
@@ -549,12 +537,35 @@ public sealed class MainForm : Form
         {
             _autoCleanTimer.Interval = _settings.AutoCleanIntervalMinutes * 60 * 1000;
             _autoCleanTimer.Start();
+            Program.Dbg($"自动清理定时器启动: 间隔 {_settings.AutoCleanIntervalMinutes} 分钟，阈值 {_settings.AutoCleanThresholdPercent}%");
+        }
+        else
+        {
+            Program.Dbg("自动清理定时器已停止");
         }
     }
 
     private void RunAutoClean()
     {
-        if (_isOptimizing) return;
+        if (!_settings.AutoClean)
+        {
+            Program.Dbg("收到自动清理 Tick，但自动清理已关闭，忽略");
+            return;
+        }
+
+        Program.Dbg("自动清理 Tick 触发，开始评估是否执行优化");
+
+        if (_isOptimizing)
+        {
+            if (!_autoCleanDeferredWhileBusy)
+            {
+                _autoCleanDeferredWhileBusy = true;
+                SetStatus("自动清理排队中：当前有优化任务正在执行");
+                Program.Info("自动清理触发时检测到优化进行中，已排队等待");
+            }
+            return;
+        }
+
         int threshold = _settings.AutoCleanThresholdPercent;
         if (threshold > 0)
         {
@@ -562,23 +573,209 @@ public sealed class MainForm : Form
             {
                 var (total, avail) = MemoryOptimizer.GetMemoryStatus();
                 int usedPct = total > 0 ? (int)((double)(total - avail) / total * 100) : 0;
-                if (usedPct < threshold) return;
+                if (usedPct < threshold)
+                {
+                    Program.Dbg($"自动清理跳过：当前占用 {usedPct}% 未达到阈值 {threshold}%");
+                    SetStatus($"自动清理跳过：占用 {usedPct}% 低于阈值 {threshold}%");
+                    return;
+                }
             }
-            catch { /* fall through and optimize */ }
+            catch (Exception ex)
+            {
+                Program.Dbg($"自动清理读取内存状态失败，将继续尝试优化: {ex.Message}");
+            }
         }
 
-        if (MemoryOptimizer.IsAdmin)
+        SetStatus("自动清理触发，准备开始优化…");
+        BeginOptimize(OptimizeTrigger.AutoTimer);
+    }
+
+    private void BeginOptimize(OptimizeTrigger trigger)
+    {
+        if (_isOptimizing)
         {
-            Task.Run(() =>
+            if (trigger == OptimizeTrigger.AutoTimer)
             {
-                try { MemoryOptimizer.Optimize(); }
-                catch { /* ignore auto-clean errors */ }
-            });
+                if (!_autoCleanDeferredWhileBusy)
+                {
+                    _autoCleanDeferredWhileBusy = true;
+                    SetStatus("自动清理排队中：当前有优化任务正在执行");
+                    Program.Info("自动清理请求已排队，等待当前优化结束");
+                }
+                return;
+            }
+
+            Program.Dbg($"忽略重复优化请求: trigger={trigger}");
+            return;
+        }
+
+        _ = OptimizeAsync(trigger);
+    }
+
+    private async Task OptimizeAsync(OptimizeTrigger trigger)
+    {
+        _activeTrigger = trigger;
+        _optimizeStartedAt = DateTime.Now;
+        _isOptimizing = true;
+        ApplyOptimizeUiState();
+
+        string triggerText = TriggerToText(trigger);
+        Program.Info($"{triggerText}开始");
+        Program.Dbg($"优化上下文: trigger={trigger}, admin={MemoryOptimizer.IsAdmin}, autoEnabled={_settings.AutoClean}, interval={_settings.AutoCleanIntervalMinutes}, threshold={_settings.AutoCleanThresholdPercent}");
+
+        try
+        {
+            if (MemoryOptimizer.IsAdmin)
+            {
+                SetStatus(trigger == OptimizeTrigger.AutoTimer ? "自动清理中…" : "正在优化内存…");
+
+                OptimizeResult? result = null;
+                Exception? optimizeError = null;
+                var optimizeTask = Task.Run(() =>
+                {
+                    try { result = MemoryOptimizer.Optimize(); }
+                    catch (Exception ex) { optimizeError = ex; }
+                });
+
+                int elapsed = 0;
+                while (!optimizeTask.IsCompleted)
+                {
+                    await Task.Delay(1000);
+                    if (optimizeTask.IsCompleted) break;
+
+                    elapsed++;
+                    try
+                    {
+                        var (t, a) = MemoryOptimizer.GetMemoryStatus();
+                        int p = t > 0 ? (int)((double)(t - a) / t * 100) : 0;
+                        string live = $"优化中… 占用 {p}% 可用 {OptimizeResult.FormatBytes(a)} / {OptimizeResult.FormatBytes(t)}";
+                        SetStatus(live);
+                        Program.Dbg($"优化进行中({elapsed}s): trigger={trigger}, used={p}%, avail={OptimizeResult.FormatBytes(a)}, total={OptimizeResult.FormatBytes(t)}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Program.Dbg($"优化进行中刷新状态失败({elapsed}s): {ex.Message}");
+                    }
+                }
+
+                await optimizeTask;
+
+                if (optimizeError != null)
+                    throw optimizeError;
+
+                var done = result!;
+                SetStatus(done.Errors.Count == 0
+                    ? $"完成：释放 {done.FreedText}，可用 {done.AfterText}"
+                    : $"完成（部分操作失败）：可用 {done.AfterText}");
+                Program.Info($"优化完成  来源={triggerText}  释放 {done.FreedText}  占用 {(int)Math.Round(done.UsagePercent)}%  可用 {done.AfterText} / {done.TotalText}");
+                foreach (var warn in done.Errors)
+                    Program.Warn($"操作提示: {warn}");
+                RefreshMemoryDisplay();
+            }
+            else
+            {
+                SetStatus(trigger == OptimizeTrigger.AutoTimer ? "自动清理触发，正在请求管理员权限…" : "正在请求管理员权限…");
+                Program.Dbg($"等待 UAC 提权结果: trigger={trigger}");
+                var result = await ElevationService.RequestOptimizeAsync();
+                if (result == null)
+                {
+                    SetStatus("已取消");
+                    Program.Warn($"{triggerText}已取消（用户未完成提权或通信超时）");
+                }
+                else if (!result.Success)
+                {
+                    SetStatus($"失败：{result.ErrorMessage}");
+                    Program.Err($"优化失败: {result.ErrorMessage}");
+                }
+                else
+                {
+                    SetStatus(result.Errors.Count == 0
+                        ? $"完成：释放 {result.FreedText}，可用 {result.AfterText}"
+                        : $"完成（部分操作失败）：可用 {result.AfterText}");
+                    Program.Info($"优化完成  来源={triggerText}  释放 {result.FreedText}  占用 {result.UsagePct}%  可用 {result.AfterText} / {result.TotalText}");
+                    foreach (var warn in result.Errors)
+                        Program.Warn($"操作提示: {warn}");
+                    RefreshMemoryDisplay();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"失败：{ex.Message}");
+            Program.Err($"优化异常: {ex.Message}");
+        }
+        finally
+        {
+            int elapsedMs = (int)(DateTime.Now - _optimizeStartedAt).TotalMilliseconds;
+            Program.Dbg($"优化任务结束: trigger={trigger}, durationMs={elapsedMs}, autoDeferred={_autoCleanDeferredWhileBusy}");
+
+            _isOptimizing = false;
+            ApplyOptimizeUiState();
+
+            if (_autoCleanDeferredWhileBusy && _settings.AutoClean)
+            {
+                _autoCleanDeferredWhileBusy = false;
+                Program.Dbg("执行排队中的自动清理检查");
+                RunAutoClean();
+            }
+        }
+    }
+
+    private void SetAutoCleanEnabled(bool enabled, string source)
+    {
+        _settings.AutoClean = enabled;
+        _settings.Save();
+
+        _syncingAutoCleanState = true;
+        try
+        {
+            _chkAutoClean.Checked = enabled;
+            _trayAutoCleanItem.Checked = enabled;
+        }
+        finally
+        {
+            _syncingAutoCleanState = false;
+        }
+
+        SetupAutoClean();
+
+        // 根据自动清理开关状态切换托盘图标
+        _tray.Icon = (enabled && _autoCleanTrayIcon is not null)
+            ? _autoCleanTrayIcon
+            : LoadIcon();
+
+        string status = enabled
+            ? $"自动清理已开启：每 {_settings.AutoCleanIntervalMinutes} 分钟，阈值 {_settings.AutoCleanThresholdPercent}%"
+            : "自动清理已关闭";
+        SetStatus(status);
+        Program.Info($"{source} -> {status}");
+    }
+
+    private void SetStatus(string text)
+    {
+        _lblStatus.Text = text;
+    }
+
+    private void ApplyOptimizeUiState()
+    {
+        if (_isOptimizing)
+        {
+            _btnOptimize.Enabled = false;
+            _btnOptimize.Text = _activeTrigger == OptimizeTrigger.AutoTimer ? "自动优化中…" : "优化中…";
         }
         else
         {
-            // 非管理员：通过 ElevationService 提权执行
-            _ = ElevationService.RequestOptimizeAsync();
+            _btnOptimize.Enabled = true;
+            _btnOptimize.Text = "立即优化";
         }
     }
+
+    private static string TriggerToText(OptimizeTrigger trigger)
+        => trigger switch
+        {
+            OptimizeTrigger.AutoTimer => "自动清理",
+            OptimizeTrigger.Startup => "启动自检优化",
+            OptimizeTrigger.TrayMenu => "托盘手动优化",
+            _ => "手动优化"
+        };
 }

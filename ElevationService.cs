@@ -28,6 +28,7 @@ static class ElevationService
         CancellationToken ct = default)
     {
         var pipeName = $"OptiMemory_{Guid.NewGuid():N}";
+        Program.Dbg($"提权请求创建: pipe={pipeName}");
 
         // 必须在启动提权进程之前创建管道服务端
         using var server = new NamedPipeServerStream(
@@ -45,10 +46,12 @@ static class ElevationService
                 UseShellExecute = true,   // 必须为 true 才能触发 UAC
                 Verb            = "runas"
             });
+            Program.Dbg("提权子进程启动成功，等待管道连接");
         }
         catch (System.ComponentModel.Win32Exception)
         {
             // 用户在 UAC 对话框中点击了"否"
+            Program.Dbg("提权请求被用户取消");
             return null;
         }
 
@@ -58,9 +61,11 @@ static class ElevationService
         try
         {
             await server.WaitForConnectionAsync(linked.Token);
+            Program.Dbg("提权子进程已连接命名管道");
         }
         catch (OperationCanceledException)
         {
+            Program.Dbg("等待提权子进程连接超时");
             return null;
         }
 
@@ -68,9 +73,14 @@ static class ElevationService
         {
             using var reader = new StreamReader(server);
             var json = await reader.ReadToEndAsync(ct);
+            Program.Dbg($"提权结果接收完成: bytes={json.Length}");
             return JsonSerializer.Deserialize<ElevatedResult>(json, _json);
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            Program.Dbg($"提权结果解析失败: {ex.Message}");
+            return null;
+        }
     }
 
     // ─── 提权子进程────────────────────────────────────────────────────────────
@@ -80,6 +90,7 @@ static class ElevationService
     /// </summary>
     public static void RunWorker(string pipeName)
     {
+        Program.Dbg($"提权子进程开始执行: pipe={pipeName}");
         ElevatedResult dto;
         try
         {
@@ -92,9 +103,11 @@ static class ElevationService
                 UsagePct:     (int)Math.Round(r.UsagePercent),
                 Errors:       r.Errors,
                 ErrorMessage: null);
+            Program.Dbg("提权子进程优化完成，准备回传结果");
         }
         catch (Exception ex)
         {
+            Program.Dbg($"提权子进程优化失败: {ex.Message}");
             dto = new ElevatedResult(
                 Success: false, FreedText: null, AfterText: null, TotalText: null,
                 UsagePct: 0, Errors: [], ErrorMessage: ex.Message);
@@ -107,8 +120,13 @@ static class ElevationService
             using var writer = new StreamWriter(client);
             writer.Write(JsonSerializer.Serialize(dto, _json));
             writer.Flush();
+            Program.Dbg("提权子进程结果回传完成");
         }
-        catch { /* best-effort：调用方超时会自行处理 */ }
+        catch (Exception ex)
+        {
+            Program.Dbg($"提权子进程结果回传失败: {ex.Message}");
+            /* best-effort：调用方超时会自行处理 */
+        }
     }
 
     // ─── 辅助 ─────────────────────────────────────────────────────────────────
