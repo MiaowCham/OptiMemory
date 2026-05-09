@@ -1,3 +1,7 @@
+## Installer output
+dist/
+installer/
+
 ## Build outputs
 bin/
 obj/
