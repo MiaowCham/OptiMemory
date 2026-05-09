@@ -10,7 +10,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
+    permissions:
+      contents: write  # 允许创建 GitHub Release
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +85,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: OptiMemory v${{ steps.version.outputs.value }}
-          draft: true
           prerelease: true
           files: |
             dist/OptiMemory-*-Setup.exe
