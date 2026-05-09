@@ -85,6 +85,7 @@ jobs:
         with:
           name: OptiMemory v${{ steps.version.outputs.value }}
           draft: true
+          prerelease: true
           files: |
             dist/OptiMemory-*-Setup.exe
             publish/single-file/OptiMemory.exe
