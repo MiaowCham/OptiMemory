@@ -24,8 +24,8 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        // 对 CLI 以外的模式（GUI 启动、提权子进程）立刻隐藏控制台窗口，
-        // 避免在双击启动时出现短暂的黑色控制台窗口。
+        // 对 CLI 以外的模式（GUI 启动、提权子进程）立刻隐藏并脱离控制台，
+        // 彻底解决双击启动时短暂出现黑色控制台窗口的问题。
         // 使用 Exe 子系统（而非 WinExe）是为了让 PowerShell/CMD 能正确等待
         // 命令行模式结束，彻底解决提示符错位和按 Enter 乱出提示符的问题。
         bool isCliMode = args.Any(a =>

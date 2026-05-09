@@ -1,5 +1,5 @@
 #define MyAppName "OptiMemory"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.2.1"
 #define MyAppPublisher "MiaowCham"
 #define MyAppURL "https://github.com/MiaowCham/OptiMemory"
 #define MyAppExeName "OptiMemory.exe"

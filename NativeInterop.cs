@@ -31,6 +31,10 @@ internal static partial class NativeInterop
     private static partial bool AttachConsole(uint dwProcessId);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool FreeConsole();
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial IntPtr GetConsoleWindow();
 
     [LibraryImport("user32.dll", SetLastError = true)]
@@ -100,10 +104,12 @@ internal static partial class NativeInterop
 
     public static void AttachParentConsole() => AttachConsole(ATTACH_PARENT_PROCESS);
 
-    /// <summary>隐藏当前进程的控制台窗口（GUI / 提权子进程模式使用）。</summary>
+    /// <summary>隐藏并完全脱离控制台（GUI / 提权子进程模式使用）。
+    /// 先隐藏窗口再 FreeConsole，避免展示任何闪烁。</summary>
     public static void HideConsoleWindow()
     {
         var hwnd = GetConsoleWindow();
         if (hwnd != IntPtr.Zero) ShowWindow(hwnd, 0 /* SW_HIDE */);
+        FreeConsole();
     }
 }
