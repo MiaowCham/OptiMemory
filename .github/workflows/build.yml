@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      # ── 读取版本号（来自 csproj InformationalVersion）──────────────────────
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $xml = [xml](Get-Content OptiMemory.csproj)
+          $ver = $xml.Project.PropertyGroup.InformationalVersion | Where-Object { $_ } | Select-Object -First 1
+          echo "value=$ver" >> $env:GITHUB_OUTPUT
+
+      # ── Release 构建（框架依赖，非单文件，供安装包打包）──────────────────
+      - name: Publish release build
+        run: >
+          dotnet publish OptiMemory.csproj
+          -c Release -r win-x64 --self-contained false
+          -p:PublishSingleFile=false
+          -o publish/release
+
+      # ── 单文件发布（框架依赖）──────────────────────────────────────────────
+      - name: Publish single-file
+        run: >
+          dotnet publish OptiMemory.csproj
+          -c Release -r win-x64 --self-contained false
+          -p:PublishSingleFile=true
+          -o publish/single-file
+
+      # ── 用 Inno Setup 打安装包 ─────────────────────────────────────────────
+      - name: Build installer
+        run: iscc installer\OptiMemory.iss
+
+      # ── 上传 Artifacts（每次构建均保留）──────────────────────────────────
+      - name: Upload single-file artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OptiMemory-${{ steps.version.outputs.value }}-single-file
+          path: publish/single-file/OptiMemory.exe
+          if-no-files-found: error
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OptiMemory-${{ steps.version.outputs.value }}-Setup
+          path: dist/OptiMemory-*-Setup.exe
+          if-no-files-found: error
+
+      # ── 推送 tag 时自动创建 GitHub Release ────────────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OptiMemory ${{ steps.version.outputs.value }}
+          draft: true
+          files: |
+            dist/OptiMemory-*-Setup.exe
+            publish/single-file/OptiMemory.exe

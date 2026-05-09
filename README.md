@@ -1,10 +1,20 @@
+<div align="center">
+<img src="OptiMemory.ico" width="20%" alt="icon" style="margin-bottom: -20px;"/>
+
 # OptiMemory
+[![MIT](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](https://github.com/MiaowCham/OptiMemory/blob/main/LICENSE)
+[![Static Badge](https://img.shields.io/badge/Languages-C%23-blue.svg)](https://github.com/search?q=repo%3AMiaowCham%2FOptiMemory++language%3AC%23&type=code)
+[![Github Release](https://img.shields.io/github/v/release/MiaowCham/OptiMemory)](https://github.com/MiaowCham/OptiMemory/releases)
+[![GitHub Actions](https://img.shields.io/github/actions/workflow/status/MiaowCham/OptiMemory/.github/workflows/build.yml)](https://github.com/MiaowCham/OptiMemory/actions/workflows/build.yml)
+[![GitHub last commit](https://img.shields.io/github/last-commit/MiaowCham/OptiMemory)](https://github.com/MiaowCham/OptiMemory/commits/main)
+
+轻量级 Windows 内存优化工具，提供图形界面与命令行两种使用方式。
+
+</div>
 
 >[!note]
 >本项目使用AI生成。  
 >This project uses AI generation.
-
-轻量级 Windows 内存优化工具，提供图形界面与命令行两种使用方式。
 
 ## 功能
 
