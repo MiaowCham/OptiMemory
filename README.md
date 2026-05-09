@@ -17,6 +17,8 @@
 
 ## 使用
 
+可以自行构建，也可以从 [Releases](https://github.com/MiaowCham/OptiMemory/releases/) 下载安装程序或单文件版本。
+
 ### 图形界面
 
 直接运行 `OptiMemory.exe` 即可启动。
