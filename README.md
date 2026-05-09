@@ -83,6 +83,10 @@ dotnet publish -c Release
 
 输出位于 `bin\Release\net9.0-windows\publish\OptiMemory.exe`。
 
+### 构建脚本
+
+提供了 `installer\build.ps1` 脚本简化构建和发布流程。直接运行，根据提示选择构建程序或安装程序。
+
 ## 鸣谢
 
 内存优化逻辑参考自 [PCL-CE](https://github.com/PCL-Community/PCL-CE) 项目中的 `MemSwapService`，使用 `ntdll.dll` / `kernel32.dll` 原生 API 实现以下操作：
