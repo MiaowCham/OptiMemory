@@ -34,13 +34,6 @@ internal static partial class NativeInterop
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool FreeConsole();
 
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial IntPtr GetConsoleWindow();
-
-    [LibraryImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
     private const uint ATTACH_PARENT_PROCESS = unchecked((uint)-1);
 
     public enum SePrivilege : uint
@@ -104,12 +97,6 @@ internal static partial class NativeInterop
 
     public static void AttachParentConsole() => AttachConsole(ATTACH_PARENT_PROCESS);
 
-    /// <summary>隐藏并完全脱离控制台（GUI / 提权子进程模式使用）。
-    /// 先隐藏窗口再 FreeConsole，避免展示任何闪烁。</summary>
-    public static void HideConsoleWindow()
-    {
-        var hwnd = GetConsoleWindow();
-        if (hwnd != IntPtr.Zero) ShowWindow(hwnd, 0 /* SW_HIDE */);
-        FreeConsole();
-    }
+    /// <summary>脱离当前进程占用的控制台，允许父 shell 重新显示提示符。</summary>
+    public static void FreeParentConsole() => FreeConsole();
 }

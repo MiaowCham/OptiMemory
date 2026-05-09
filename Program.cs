@@ -24,17 +24,21 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        // 对 CLI 以外的模式（GUI 启动、提权子进程）立刻隐藏并脱离控制台，
-        // 彻底解决双击启动时短暂出现黑色控制台窗口的问题。
-        // 使用 Exe 子系统（而非 WinExe）是为了让 PowerShell/CMD 能正确等待
-        // 命令行模式结束，彻底解决提示符错位和按 Enter 乱出提示符的问题。
+        // WinExe 子系统：GUI 双击时完全无控制台窗口。
+        // CLI 模式提前附着父 shell 控制台，确保 --debug 等日志从第一行起就能输出。
         bool isCliMode = args.Any(a =>
             a.Equals("--nogui", StringComparison.OrdinalIgnoreCase) ||
             a.Equals("-n",      StringComparison.OrdinalIgnoreCase) ||
             a.Equals("--help",  StringComparison.OrdinalIgnoreCase) ||
             a.Equals("-h",      StringComparison.OrdinalIgnoreCase));
-        if (!isCliMode)
-            NativeInterop.HideConsoleWindow();
+        bool isElevated = args.Any(a =>
+            a.Equals("--elevated", StringComparison.OrdinalIgnoreCase));
+
+        if (isCliMode && !isElevated)
+        {
+            NativeInterop.AttachParentConsole();
+            Console.WriteLine(); // 推过父 shell 可能已输出的提示符，避免重叠
+        }
 
         var opts = ParseArgs(args);
         if (_debug)
@@ -55,6 +59,7 @@ static class Program
         {
             Dbg("显示帮助并退出");
             PrintHelp();
+            NativeInterop.FreeParentConsole();
             return;
         }
 
@@ -62,6 +67,7 @@ static class Program
         {
             Dbg("进入命令行模式");
             RunNoGui(opts);
+            NativeInterop.FreeParentConsole();
         }
         else
         {
@@ -171,8 +177,6 @@ static class Program
 
     private static void RunNoGui(CliOptions opts)
     {
-        // 使用 Exe 子系统后控制台已自动就绪，无需 AttachConsole
-        Dbg("命令行模式控制台已就绪");
 
         // 启动信息 + 当前内存状态
         try
