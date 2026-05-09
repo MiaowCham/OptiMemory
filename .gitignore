@@ -1,0 +1,28 @@
+## Build outputs
+bin/
+obj/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+
+## Rider
+.idea/
+
+## Publish output
+publish/
+
+## OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+## Secrets / local config
+*.pfx
+*.snk
+appsettings.Local.json
+
+## Temp reference project (not part of build)
+temp_poj/
