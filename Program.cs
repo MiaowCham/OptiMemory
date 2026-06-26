@@ -44,14 +44,19 @@ static class Program
         if (_debug)
             Info("已启用调试日志（--debug）");
         Dbg($"参数解析完成: {string.Join(' ', args)}");
-        Dbg($"运行选项 => nogui={opts.NoGui}, auto={opts.Auto}, debug={opts.Debug}, interval={opts.IntervalMinutes?.ToString() ?? "(默认)"}, threshold={opts.ThresholdPercent?.ToString() ?? "(默认)"}, elevated={opts.Elevated}");
+        Dbg($"运行选项 => nogui={opts.NoGui}, auto={opts.Auto}, debug={opts.Debug}, interval={opts.IntervalMinutes?.ToString() ?? "(默认)"}, threshold={opts.ThresholdPercent?.ToString() ?? "(默认)"}, elevated={opts.Elevated}, session={opts.Session}");
 
         // 提权子进程模式——静默执行，无 GUI，无单例锁，必须在一切其他分支之前处理
         if (opts.Elevated)
         {
-            Dbg("进入提权子进程模式");
+            Dbg(opts.Session ? "进入持久提权子进程模式" : "进入提权子进程模式");
             if (opts.PipeName is { Length: > 0 } pipe)
-                ElevationService.RunWorker(pipe);
+            {
+                if (opts.Session)
+                    ElevationService.RunSessionWorker(pipe);
+                else
+                    ElevationService.RunWorker(pipe);
+            }
             return;
         }
 
@@ -95,6 +100,7 @@ static class Program
         public bool Auto;
         public bool Debug;
         public bool Elevated;       // 提权子进程模式
+        public bool Session;        // 持久提权会话模式
         public string? PipeName;    // 命名管道名称
         public int? IntervalMinutes;
         public int? ThresholdPercent;
@@ -120,6 +126,7 @@ static class Program
                         o.ThresholdPercent = tv;
                     break;
                 case "--elevated": o.Elevated = true; break;
+                case "--session": o.Session = true; break;
                 case "--pipe":
                     if (i + 1 < args.Length) o.PipeName = args[++i];
                     break;

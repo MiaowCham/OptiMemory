@@ -65,6 +65,9 @@ public sealed class MainForm : Form
     private DateTime _optimizeStartedAt;
     private bool _closing;
     private Icon? _autoCleanTrayIcon;
+    private ElevationService.ElevatedSession? _elevatedAutoCleanSession;
+    private Task? _autoCleanSessionTask;
+    private bool _autoCleanSessionStarting;
 
     public MainForm(AppSettings settings)
     {
@@ -408,15 +411,19 @@ public sealed class MainForm : Form
         else
         {
             _closing = true;
+            _autoCleanTimer.Stop();
             _tray.Visible = false;
+            _ = DisposeAutoCleanElevationSessionAsync();
             Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         }
     }
 
-    private void ExitApp()
+    private async void ExitApp()
     {
         _closing = true;
         _settings.Save();
+        _autoCleanTimer.Stop();
+        await DisposeAutoCleanElevationSessionAsync();
         Application.Exit();
     }
 
@@ -536,12 +543,73 @@ public sealed class MainForm : Form
         if (_settings.AutoClean)
         {
             _autoCleanTimer.Interval = _settings.AutoCleanIntervalMinutes * 60 * 1000;
+            EnsureAutoCleanElevationSession();
             _autoCleanTimer.Start();
             Program.Dbg($"自动清理定时器启动: 间隔 {_settings.AutoCleanIntervalMinutes} 分钟，阈值 {_settings.AutoCleanThresholdPercent}%");
         }
         else
         {
+            _ = DisposeAutoCleanElevationSessionAsync();
             Program.Dbg("自动清理定时器已停止");
+        }
+    }
+
+    private void EnsureAutoCleanElevationSession()
+    {
+        if (MemoryOptimizer.IsAdmin || !_settings.AutoClean || _elevatedAutoCleanSession is not null || _autoCleanSessionStarting)
+            return;
+
+        _autoCleanSessionTask = StartAutoCleanElevationSessionAsync();
+    }
+
+    private async Task StartAutoCleanElevationSessionAsync()
+    {
+        _autoCleanSessionStarting = true;
+        SetStatus("自动清理需要管理员权限，正在请求 UAC 授权…");
+        Program.Info("自动清理启用，正在建立持久提权会话");
+
+        try
+        {
+            var session = await ElevationService.StartSessionAsync();
+            if (!_settings.AutoClean)
+            {
+                if (session is not null)
+                    await session.DisposeAsync();
+                return;
+            }
+
+            if (session is null)
+            {
+                Program.Warn("自动清理持久提权会话未建立");
+                SetStatus("自动清理未获得管理员权限，已关闭");
+                SetAutoCleanEnabled(false, "提权失败");
+                return;
+            }
+
+            _elevatedAutoCleanSession = session;
+            SetStatus($"自动清理已就绪：每 {_settings.AutoCleanIntervalMinutes} 分钟，阈值 {_settings.AutoCleanThresholdPercent}%");
+            Program.Info("自动清理持久提权会话已建立");
+        }
+        catch (Exception ex)
+        {
+            Program.Err($"自动清理提权会话异常: {ex.Message}");
+            SetStatus($"自动清理提权失败：{ex.Message}");
+            SetAutoCleanEnabled(false, "提权异常");
+        }
+        finally
+        {
+            _autoCleanSessionStarting = false;
+        }
+    }
+
+    private async Task DisposeAutoCleanElevationSessionAsync()
+    {
+        var session = _elevatedAutoCleanSession;
+        _elevatedAutoCleanSession = null;
+        if (session is not null)
+        {
+            await session.DisposeAsync();
+            Program.Dbg("自动清理持久提权会话已释放");
         }
     }
 
@@ -563,6 +631,16 @@ public sealed class MainForm : Form
                 SetStatus("自动清理排队中：当前有优化任务正在执行");
                 Program.Info("自动清理触发时检测到优化进行中，已排队等待");
             }
+            return;
+        }
+
+        if (!MemoryOptimizer.IsAdmin && _elevatedAutoCleanSession is null)
+        {
+            EnsureAutoCleanElevationSession();
+            SetStatus(_autoCleanSessionStarting
+                ? "自动清理等待管理员授权…"
+                : "自动清理等待提权会话就绪…");
+            Program.Dbg("自动清理等待持久提权会话，跳过本次 Tick");
             return;
         }
 
@@ -674,13 +752,20 @@ public sealed class MainForm : Form
             }
             else
             {
-                SetStatus(trigger == OptimizeTrigger.AutoTimer ? "自动清理触发，正在请求管理员权限…" : "正在请求管理员权限…");
+                SetStatus(trigger == OptimizeTrigger.AutoTimer ? "自动清理中…" : "正在请求管理员权限…");
                 Program.Dbg($"等待 UAC 提权结果: trigger={trigger}");
-                var result = await ElevationService.RequestOptimizeAsync();
+                var result = await RunElevatedOptimizeAsync(trigger);
                 if (result == null)
                 {
-                    SetStatus("已取消");
-                    Program.Warn($"{triggerText}已取消（用户未完成提权或通信超时）");
+                    SetStatus(trigger == OptimizeTrigger.AutoTimer ? "自动清理提权会话已失效，等待重新授权" : "已取消");
+                    Program.Warn(trigger == OptimizeTrigger.AutoTimer
+                        ? "自动清理持久提权会话已失效"
+                        : $"{triggerText}已取消（用户未完成提权或通信超时）");
+                    if (trigger == OptimizeTrigger.AutoTimer)
+                    {
+                        await DisposeAutoCleanElevationSessionAsync();
+                        EnsureAutoCleanElevationSession();
+                    }
                 }
                 else if (!result.Success)
                 {
@@ -719,6 +804,27 @@ public sealed class MainForm : Form
                 RunAutoClean();
             }
         }
+    }
+
+    private async Task<ElevatedResult?> RunElevatedOptimizeAsync(OptimizeTrigger trigger)
+    {
+        if (_elevatedAutoCleanSession is not null)
+            return await _elevatedAutoCleanSession.OptimizeAsync();
+
+        if (_settings.AutoClean && (trigger == OptimizeTrigger.AutoTimer || trigger == OptimizeTrigger.Startup))
+        {
+            EnsureAutoCleanElevationSession();
+            if (_autoCleanSessionTask is not null)
+            {
+                SetStatus("等待自动清理管理员授权完成…");
+                await _autoCleanSessionTask;
+            }
+
+            if (_elevatedAutoCleanSession is not null)
+                return await _elevatedAutoCleanSession.OptimizeAsync();
+        }
+
+        return await ElevationService.RequestOptimizeAsync();
     }
 
     private void SetAutoCleanEnabled(bool enabled, string source)
